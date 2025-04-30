@@ -3,6 +3,7 @@ import numpy as np
 import queue
 import threading
 from .utils import rotate_frame
+import os
 
 class MotionAnalyzer():
     def __init__(self, cfg):
@@ -29,6 +30,9 @@ class MotionAnalyzer():
         cell_h = h // grid_h
         cell_w = w // grid_w
 
+        if keypoints is None or descriptors is None:
+            return None, None
+        
         # 每個格子分開挑
         for gy in range(grid_h):
             for gx in range(grid_w):
@@ -125,7 +129,8 @@ class MotionAnalyzer():
         img_count = 0
         for video_path in ls_video_path:
             cap = cv2.VideoCapture(video_path)
-            
+            video_name = os.path.basename(video_path)
+            frame_count_in_video = 0
             while True:
                 ret, frame = cap.read()
                 if not ret:
@@ -192,7 +197,9 @@ class MotionAnalyzer():
                         "prev_kp": prev_kp,
                         "prev_frame": prev_frame,
                         "status": str_status,
-                        "draw_frame": draw_frame.copy()
+                        "draw_frame": draw_frame.copy(),
+                        "video_name": video_name,
+                        "frame_count_in_video": frame_count_in_video
                     }
                     
                     self.buffer.put(video_dict)
@@ -201,6 +208,7 @@ class MotionAnalyzer():
                     prev_des = des
                 
                 img_count += 1
+                frame_count_in_video += 1
                     
         
         # end
