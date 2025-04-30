@@ -1,0 +1,38 @@
+BASIC:
+  DRAW: True
+
+MANUAL_CORRECT:
+  ENABLE: False
+  PTS_SRC:
+  - [0, 0]
+  - [1000, 0]
+  - [1000, 1000]
+  - [0, 1000]
+
+  PTS_DST:
+    # - [-100, -20]
+    - [0, 0]
+    # - [1100, -20]
+    - [1000, 0]
+    - [1000, 1000]
+    - [0, 1000]
+  
+  SHIFT_X: 0
+  SHIFT_Y: 0
+  ANGLE_DEGREE: 0
+  CAL_STD: False
+
+MODEL:
+  ENABLE: True
+  NUM_THREADS: 16
+  PATH: "F:/PavementMotionTrack/resource/yolov8l_seg_1280_b16.pt"
+
+DISTRESS_COLOR:
+  alligator: [101, 230, 62]
+  crack: [235, 51, 36]
+  cover: [0, 0, 255]
+  patch: [255, 254, 145]
+  pothole: [255, 128, 128]
+  draincover: [255, 128, 0]
+  expansion: [234, 63, 247]
+  core: [180, 244, 247]
