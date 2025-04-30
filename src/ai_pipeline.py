@@ -5,6 +5,8 @@ import threading
 import cv2
 import numpy as np
 import time
+import os
+import json
 
 class MultiVideoPredictor:
     def __init__(self, cfg, num_threads=1):
@@ -23,75 +25,128 @@ class MultiVideoPredictor:
         video_dict["result"] = results[0]
         return video_dict
     
+    def draw_result(self, video_dict):
+        
+        result = video_dict["result"]
+        H2prevFrame = video_dict["H2prevFrame"]
+        draw_frame = video_dict["draw_frame"]
+        
+        if draw_frame is None:
+            draw_frame = video_dict["frame"]
+        
+        prev_frame = video_dict["prev_frame"]
+        
+        boxes = result.boxes.xyxy.cpu().numpy()  # 邊界框（bounding box）
+        scores = result.boxes.conf.cpu().numpy()  # 置信度
+        labels = result.boxes.cls.cpu().numpy()   # 分類結果（label）
+        
+        if result.masks is not None:
+            masks = result.masks.data.cpu().numpy()
+            polygons = result.masks.xy
+        else:
+            masks = [None for _ in range(len(boxes))]
+            polygons = [None for _ in range(len(boxes))]
+        
+        # 繪製邊界框  
+        for box, score, label, mask, polygon in zip(boxes, scores, labels, masks, polygons):
+            color = self.cfg["DISTRESS_COLOR"][self.names[int(label)]]
+            x1, y1, x2, y2 = box
+            
+            if mask is not None:
+                mask = cv2.resize(mask, (draw_frame.shape[1], draw_frame.shape[0]))
+                mask = (mask > 0.5).astype(np.uint8)
+                color_mask = np.zeros_like(draw_frame, dtype=np.uint8)
+                color_mask[:, :] = color
+                alpha = 0.2  # 半透明程度，0.0～1.0之間
+                draw_frame = np.where(mask[:, :, None], (draw_frame * (1 - alpha) + color_mask * alpha).astype(np.uint8), draw_frame)
+            
+            # cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 5)
+            cv2.putText(draw_frame, f"{self.names[int(label)]}", (int(x1), int(y1) + 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 3, color, 5)
+            cv2.putText(draw_frame, f" {score:.2f}", (int(x1), int(y1) + 150),
+                        cv2.FONT_HERSHEY_SIMPLEX, 3, color, 5)
+
+            # transform polygons x,y to last frame position
+            if polygon is not None:
+                color = (0, 0, 255) # 紅色代表過去的
+                poly_np = np.array(polygon, dtype=np.float32).reshape(-1, 1, 2)  # 轉成(N,1,2)
+                transformed_poly = cv2.perspectiveTransform(poly_np, H2prevFrame)  # 用H轉換
+                transformed_poly = transformed_poly.reshape(-1, 2)  # 還原成(N,2)
+                cv2.polylines(prev_frame, [transformed_poly.astype(np.int32)], True, color, 5)
+    
+        video_dict["draw_frame"] = draw_frame
+        video_dict["prev_frame"] = prev_frame
+        
+        return video_dict
+    
+    def save_json(self, video_dict, img_path):
+        # Generate JSON file path
+        json_filename = os.path.splitext(os.path.basename(img_path))[0] + ".json"
+        json_path = os.path.join(os.path.dirname(img_path), json_filename)
+        
+        result = video_dict["result"]
+        height, width = result.orig_shape
+
+        # Initialize JSON data structure
+        data = {
+            "version": "5.1.1",
+            "flags": {},
+            "shapes": [],
+            "imagePath": os.path.basename(img_path),
+            "imageHeight": height,
+            "imageWidth": width,
+            "imageData": None,
+            "transform": video_dict["H2prevFrame"].tolist() if video_dict["H2prevFrame"] is not None else None
+        }
+        
+        if result.masks is not None:
+            polygons = result.masks.xy
+        else:
+            polygons = [None for _ in range(len(result.boxes.xyxy))]
+            
+        scores = result.boxes.conf.cpu().numpy()
+        labels = result.boxes.cls.cpu().numpy()
+        
+        for score, label, polygon in zip(scores, labels, polygons):
+            data["shapes"].append({
+                "label": self.names[int(label)],
+                "points": polygon.astype(np.int32).tolist(),
+                "group_id": None,
+                "shape_type": "polygon",
+                "flags": {},
+                "score": f"{score:.2f}"
+            })
+        
+        # Save JSON file
+        json.dump(data, open(json_path, "w"))
+    
     def _callback(self, fut):
         """把預測結果加到 buffer"""
         try:
             video_dict = fut.result()
-            result = video_dict["result"]
             
-            if not self.draw:
-                while video_dict["frame_id"] != self.img_count:
-                    time.sleep(0.1)
-                self.buffer.put(video_dict)
-                self.img_count += 1
-                return
-            
-            H2prevFrame = video_dict["H2prevFrame"]
-            frame = video_dict["draw_frame"]
-            if frame is None:
-                frame = video_dict["frame"]
-            prev_frame = video_dict["prev_frame"]
-            
-            boxes = result.boxes.xyxy.cpu().numpy()  # 邊界框（bounding box）
-            scores = result.boxes.conf.cpu().numpy()  # 置信度
-            labels = result.boxes.cls.cpu().numpy()   # 分類結果（label）
-            
-            if result.masks is not None:
-                masks = result.masks.data.cpu().numpy()
-                polygons = result.masks.xy
-            else:
-                masks = [None for _ in range(len(boxes))]
-                polygons = [None for _ in range(len(boxes))]
-            
-            # 繪製邊界框  
-            for box, score, label, mask, polygon in zip(boxes, scores, labels, masks, polygons):
-                color = self.cfg["DISTRESS_COLOR"][self.names[int(label)]]
-                x1, y1, x2, y2 = box
+            if self.draw:
+                video_dict = self.draw_result(video_dict)
                 
-                if mask is not None:
-                    mask = cv2.resize(mask, (frame.shape[1], frame.shape[0]))
-                    mask = (mask > 0.5).astype(np.uint8)
-                    color_mask = np.zeros_like(frame, dtype=np.uint8)
-                    color_mask[:, :] = color
-                    alpha = 0.2  # 半透明程度，0.0～1.0之間
-                    frame = np.where(mask[:, :, None], (frame * (1 - alpha) + color_mask * alpha).astype(np.uint8), frame)
+            if self.cfg["MODEL"]["SAVE"] is not None:
                 
-                # cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 5)
-                cv2.putText(frame, f"{self.names[int(label)]}", (int(x1), int(y1) + 50),
-                            cv2.FONT_HERSHEY_SIMPLEX, 3, color, 5)
-                cv2.putText(frame, f" {score:.2f}", (int(x1), int(y1) + 150),
-                            cv2.FONT_HERSHEY_SIMPLEX, 3, color, 5)
-
-                # transform polygons x,y to last frame position
-                if polygon is not None:
-                    color = (0, 0, 255) # 紅色代表過去的
-                    poly_np = np.array(polygon, dtype=np.float32).reshape(-1, 1, 2)  # 轉成(N,1,2)
-                    transformed_poly = cv2.perspectiveTransform(poly_np, H2prevFrame)  # 用H轉換
-                    transformed_poly = transformed_poly.reshape(-1, 2)  # 還原成(N,2)
-                    cv2.polylines(prev_frame, [transformed_poly.astype(np.int32)], True, color, 5)
-        
-            video_dict["draw_frame"] = frame
-            video_dict["prev_frame"] = prev_frame
-            
-            while video_dict["frame_id"] != self.img_count:
-                time.sleep(0.1)
-            self.buffer.put(video_dict)
-            self.img_count += 1
+                # save image
+                img_name = os.path.basename(video_dict["video_name"]).split(".")[0]+f"_{video_dict['frame_count_in_video']}.jpg"
+                img_path = os.path.join(self.cfg["MODEL"]["SAVE"], img_name)
+                
+                threading.Thread(target=cv2.imwrite, args=(img_path, video_dict["frame"])).start()
+                
+                # save yolo result as json
+                threading.Thread(target=self.save_json, args=(video_dict, img_path)).start()
             
         except Exception as e:
             print(f"Predict failed: {e}")
             video_dict["result"] = None
-            self.buffer.put(video_dict)
+        
+        while video_dict["frame_id"] != self.img_count:
+            time.sleep(0.1)
+        self.buffer.put(video_dict)
+        self.img_count += 1
 
     def run(self, src_queue):
         img_count = 0
@@ -111,6 +166,8 @@ class MultiVideoPredictor:
     
     def muti_predict(self, src_queue, draw=False):
         self.draw = draw
+        if self.cfg["MODEL"]["SAVE"] is not None:
+            os.makedirs(self.cfg["MODEL"]["SAVE"], exist_ok=True)
         predict_thread = threading.Thread(target=self.run, args=(src_queue, ))
         predict_thread.start()
         return predict_thread
