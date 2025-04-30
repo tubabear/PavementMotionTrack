@@ -26,6 +26,7 @@ MODEL:
   ENABLE: True
   NUM_THREADS: 16
   PATH: "F:/PavementMotionTrack/resource/yolov8l_seg_1280_b16.pt"
+  SAVE: "C:/Users/juehua/Pictures/temp"
 
 DISTRESS_COLOR:
   alligator: [101, 230, 62]
